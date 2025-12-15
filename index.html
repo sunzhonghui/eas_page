@@ -1,0 +1,562 @@
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Rain Control - Adaptive Density</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        /* Video: Bottom Right (PIP Style) */
+        #input-video {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 320px;
+            height: 240px;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror */
+            z-index: 20;
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0,0,0,0.5);
+            background: #001122;
+            border-radius: 4px;
+        }
+
+        #video-label {
+            position: absolute;
+            bottom: 265px;
+            right: 20px;
+            color: #00ffff;
+            font-size: 12px;
+            text-shadow: 0 0 5px #00ffff;
+            z-index: 21;
+            background: rgba(0,0,0,0.7);
+            padding: 2px 5px;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+            background: radial-gradient(circle at center, #111 0%, #000 80%);
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            z-index: 10;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-header {
+            text-align: left;
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+            pointer-events: auto;
+            margin-left: 20px;
+            margin-top: 10px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            margin: 0;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            border-left: 4px solid #00ffff;
+            padding-left: 15px;
+            background: linear-gradient(90deg, rgba(0,255,255,0.1), transparent);
+        }
+
+        .status-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            padding: 15px;
+            background: rgba(0, 10, 20, 0.8);
+            color: #fff;
+            font-size: 12px;
+            text-align: right;
+            border-right: 4px solid #00ffff;
+            width: 250px;
+        }
+
+        .status-item {
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(0,255,255,0.1);
+            padding-bottom: 2px;
+        }
+
+        .status-value {
+            color: #00ffff;
+            font-weight: bold;
+        }
+
+        /* Loading */
+        #loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            color: #00ffff;
+            transition: opacity 0.5s;
+        }
+        
+        .loader-text {
+            margin-top: 20px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="video-label">OPERATOR FEED /// LIVE</div>
+    <video id="input-video" playsinline autoplay muted></video>
+
+    <div id="loader">
+        <svg width="50" height="50" viewBox="0 0 50 50">
+            <circle cx="25" cy="25" r="20" stroke="#00ffff" stroke-width="4" fill="none" stroke-dasharray="100" stroke-dashoffset="0">
+                <animate attributeName="stroke-dashoffset" from="0" to="200" dur="2s" repeatCount="indefinite" />
+            </circle>
+        </svg>
+        <div class="loader-text" id="loading-msg">INITIALIZING SYSTEMS...</div>
+    </div>
+
+    <div id="ui-layer">
+        <div class="hud-header">
+            <h1>Rain Controller v2.6</h1>
+            <div style="font-size: 10px; opacity: 0.7; margin-top: 5px;">> ADAPTIVE DENSITY AGGREGATION</div>
+        </div>
+        
+        <div class="status-panel">
+            <div class="status-item"><span>SYSTEM STATUS</span> <span id="tracking-status" class="status-value" style="color:red">OFFLINE</span></div>
+            <div class="status-item"><span>MODE</span> <span id="state-display" class="status-value">STANDARD</span></div>
+            <div class="status-item"><span>FINGERS</span> <span id="finger-count" class="status-value">0</span></div>
+            <div class="status-item"><span>PARTICLES</span> <span class="status-value">20,000</span></div>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <!-- Libraries   
+     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FontLoader.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/geometries/TextGeometry.js"></script>
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+ 
+
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <script>
+        // --- Configuration ---
+        const PARTICLE_COUNT = 20000;
+        const RAIN_SPEED = 1.2; 
+        const AGGREGATION_SPEED = 0.08; 
+        
+        const COLOR_RAIN = 0x0088ff;
+        const COLOR_SHAPE = 0x00ffff; 
+        const COLOR_FREEZE = 0x0088ff;
+
+        // --- Global Variables ---
+        let scene, camera, renderer, composer, controls;
+        let particles, geometry;
+        let positions, velocities, colors;
+        let particleSystem;
+        let currentMode = 'rain'; 
+        let currentNumber = 1;
+        
+        let loadedFont = null;
+        let numberPoints = {}; 
+
+        // Gesture Variables
+        let hands;
+        let lastFingerCount = -1;
+        let frameStabilityCounter = 0;
+        const STABILITY_THRESHOLD = 8; 
+
+        // --- Initialization ---
+        function init() {
+            initThreeJS();
+            initMediaPipe();
+        }
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.003);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Set Camera to face forward directly
+            camera.position.set(0, 0, 110);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            
+            // Disable Auto Rotate
+            controls.autoRotate = false;
+            
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            
+            createParticles();
+
+            // Bloom for "Energy" look
+            const renderScene = new THREE.RenderPass(scene, camera);
+            const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 1.5;
+            bloomPass.radius = 0.5;
+
+            composer = new THREE.EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            loadFontAndStart();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        async function initMediaPipe() {
+            const videoElement = document.getElementById('input-video');
+            hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 0,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandsResults);
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
+                    detectHands();
+                };
+            } catch (e) {
+                console.error("Camera failed:", e);
+                document.getElementById('tracking-status').innerText = "NO CAM";
+            }
+        }
+
+        async function detectHands() {
+            const videoElement = document.getElementById('input-video');
+            if (videoElement.currentTime > 0 && !videoElement.paused && !videoElement.ended) {
+                await hands.send({image: videoElement});
+            }
+            requestAnimationFrame(detectHands);
+        }
+
+        function onHandsResults(results) {
+            const trackingStatus = document.getElementById('tracking-status');
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                trackingStatus.innerText = "ONLINE";
+                trackingStatus.style.color = "#00ffff";
+                const fingers = countFingers(results.multiHandLandmarks[0]);
+                document.getElementById('finger-count').innerText = fingers;
+                
+                if (fingers === lastFingerCount) {
+                    frameStabilityCounter++;
+                    if (frameStabilityCounter > STABILITY_THRESHOLD) {
+                        triggerModeByFingers(fingers);
+                    }
+                } else {
+                    lastFingerCount = fingers;
+                    frameStabilityCounter = 0;
+                }
+            } else {
+                trackingStatus.innerText = "SEARCHING";
+                trackingStatus.style.color = "orange";
+            }
+        }
+
+        function countFingers(landmarks) {
+            let count = 0;
+            if (landmarks[8].y < landmarks[6].y) count++;
+            if (landmarks[12].y < landmarks[10].y) count++;
+            if (landmarks[16].y < landmarks[14].y) count++;
+            if (landmarks[20].y < landmarks[18].y) count++;
+            if (Math.hypot(landmarks[4].x - landmarks[17].x, landmarks[4].y - landmarks[17].y) > 
+                Math.hypot(landmarks[3].x - landmarks[17].x, landmarks[3].y - landmarks[17].y)) {
+                count++;
+            }
+            return count;
+        }
+
+        function triggerModeByFingers(count) {
+            if (
+                (count === 0 && currentMode === 'rain') ||
+                (count === 5 && currentMode === 'freeze') ||
+                (count >= 1 && count <= 4 && currentMode === 'shape' && currentNumber === count)
+            ) return;
+
+            if (count === 0) {
+                setMode('rain');
+            } else if (count >= 1 && count <= 4) {
+                setMode(count);
+            } else if (count === 5) {
+                setMode('freeze');
+            }
+        }
+
+        // --- Particles ---
+        function createParticles() {
+            geometry = new THREE.BufferGeometry();
+            positions = new Float32Array(PARTICLE_COUNT * 3);
+            colors = new Float32Array(PARTICLE_COUNT * 3);
+            velocities = new Float32Array(PARTICLE_COUNT * 3);
+
+            const spread = 200;
+            const color = new THREE.Color(COLOR_RAIN);
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                positions[i * 3] = (Math.random() - 0.5) * spread;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * spread * 2;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * spread;
+                
+                velocities[i * 3 + 1] = - (Math.random() * 0.5 + 0.5) * RAIN_SPEED;
+
+                colors[i * 3] = color.r;
+                colors[i * 3 + 1] = color.g;
+                colors[i * 3 + 2] = color.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            const sprite = new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/disc.png');
+
+            const material = new THREE.PointsMaterial({
+                vertexColors: true,
+                size: 0.7,
+                map: sprite,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            particleSystem = new THREE.Points(geometry, material);
+            scene.add(particleSystem);
+        }
+
+        function loadFontAndStart() {
+            const loader = new THREE.FontLoader();
+            loader.load('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/fonts/helvetiker_bold.typeface.json', function (font) {
+                loadedFont = font;
+                for(let i=1; i<=4; i++) {
+                    numberPoints[i] = generateHighDefPoints(i.toString());
+                }
+                document.getElementById('loader').style.opacity = 0;
+                setTimeout(() => document.getElementById('loader').remove(), 500);
+                animate();
+            });
+        }
+
+        // Modified Algorithm: Adaptive Density
+        function generateHighDefPoints(text) {
+            const points = [];
+            
+            // Adaptive density settings
+            // '1' and '4' have less surface area, so we drastically increase density
+            // to make them look as "heavy" and visible as '2', '3', '5'
+            let densityMultiplier = 3;
+            if (text === '1') densityMultiplier = 14; // Very high density for 1
+            if (text === '4') densityMultiplier = 8;  // High density for 4
+            
+            // 1. Create a large, crisp geometry (No bevels, large size)
+            const textGeo = new THREE.TextGeometry(text, {
+                font: loadedFont,
+                size: 80,         
+                height: 5,        
+                curveSegments: 6, 
+                bevelEnabled: false 
+            });
+            textGeo.center();
+            
+            // 2. Sample points from the SURFACE
+            const pos = textGeo.attributes.position;
+            const count = pos.count;
+            
+            for (let i = 0; i < count; i += 3) {
+                const ax = pos.getX(i);   const ay = pos.getY(i);   const az = pos.getZ(i);
+                const bx = pos.getX(i+1); const by = pos.getY(i+1); const bz = pos.getZ(i+1);
+                const cx = pos.getX(i+2); const cy = pos.getY(i+2); const cz = pos.getZ(i+2);
+
+                // Use the adaptive multiplier
+                for(let j=0; j<densityMultiplier; j++) {
+                    const r1 = Math.random();
+                    const r2 = Math.random();
+                    const sqrtR1 = Math.sqrt(r1);
+                    
+                    const u = 1 - sqrtR1;
+                    const v = sqrtR1 * (1 - r2);
+                    const w = sqrtR1 * r2;
+                    
+                    const px = u*ax + v*bx + w*cx;
+                    const py = u*ay + v*by + w*cy;
+                    const pz = u*az + v*bz + w*cz;
+                    
+                    points.push(px, py, pz);
+                }
+            }
+            
+            return points;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const time = Date.now() * 0.001;
+            const pos = geometry.attributes.position.array;
+            const col = geometry.attributes.color.array;
+            
+            const cRain = new THREE.Color(COLOR_RAIN);
+            const cShape = new THREE.Color(COLOR_SHAPE);
+            const cFreeze = new THREE.Color(COLOR_FREEZE);
+            const cDim = new THREE.Color(0x002244); 
+
+            let targets = null;
+            if (currentMode === 'shape') {
+                targets = numberPoints[currentNumber];
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const idx = i * 3;
+
+                if (currentMode === 'shape' && targets) {
+                    const targetIdx = i % (targets.length / 3); 
+                    
+                    if (i < targets.length / 3) {
+                        const tx = targets[targetIdx * 3];
+                        const ty = targets[targetIdx * 3 + 1];
+                        const tz = targets[targetIdx * 3 + 2];
+
+                        pos[idx] += (tx - pos[idx]) * AGGREGATION_SPEED;
+                        pos[idx+1] += (ty - pos[idx+1]) * AGGREGATION_SPEED;
+                        pos[idx+2] += (tz - pos[idx+2]) * AGGREGATION_SPEED;
+
+                        col[idx] = cShape.r; col[idx+1] = cShape.g; col[idx+2] = cShape.b;
+                    } else {
+                        pos[idx+1] += velocities[idx+1];
+                        if (pos[idx+1] < -100) {
+                            pos[idx+1] = 100;
+                            pos[idx] = (Math.random() - 0.5) * 200;
+                            pos[idx+2] = (Math.random() - 0.5) * 200;
+                        }
+                        col[idx] = cDim.r; col[idx+1] = cDim.g; col[idx+2] = cDim.b;
+                    }
+
+                } else if (currentMode === 'freeze') {
+                    const ix = i % 100;
+                    pos[idx + 1] += Math.sin(time * 2 + ix) * 0.05;
+                    col[idx] = cFreeze.r; col[idx+1] = cFreeze.g; col[idx+2] = cFreeze.b;
+                } else {
+                    pos[idx + 1] += velocities[idx + 1];
+
+                    if (pos[idx + 1] < -100) {
+                        pos[idx + 1] = 100;
+                        pos[idx] = (Math.random() - 0.5) * 200;
+                        pos[idx + 2] = (Math.random() - 0.5) * 200;
+                    }
+                    col[idx] = cRain.r; col[idx+1] = cRain.g; col[idx+2] = cRain.b;
+                }
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+            
+            controls.update();
+            composer.render();
+        }
+
+        function setMode(mode) {
+            if (mode === 'rain') {
+                currentMode = 'rain';
+                document.getElementById('state-display').innerText = "SLOW RAIN";
+                document.getElementById('state-display').style.color = "#00aaff";
+            } 
+            else if (mode === 'freeze') {
+                currentMode = 'freeze';
+                document.getElementById('state-display').innerText = "TIME STOP";
+                document.getElementById('state-display').style.color = "#00aaff";
+            } 
+            else {
+                currentMode = 'shape';
+                currentNumber = mode;
+                document.getElementById('state-display').innerText = "SOLID FORM";
+                document.getElementById('state-display').style.color = "#00ffff";
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+</html>
